@@ -52,13 +52,28 @@ def create_vocabulary(text):
     vocab_size = len(chars)
     return chars, vocab_size
 
-def get_batch(split, block_size, batch_size, seed = 42):
+def get_batch(split, block_size = 8, batch_size = 32, seed = 42):
     torch.manual_seed(seed)
     data = train_data if split == "train" else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
     return x, y
+
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval() #sets to evaluation phase, with our model it does nothing
+    for split in ["train", "val"]:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            x, y = get_batch(split)
+            logits, loss = model(x, y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train() #sets to training phase, with our model it does nothing
+    return out
 
 if __name__ == "__main__":
 
@@ -80,25 +95,28 @@ if __name__ == "__main__":
 
 
     
-    batch_size = 4 
-    block_size = 8 
+    #HYPERPARAMETERS
+    batch_size = 32
+    block_size = 8
+    max_iters = 3000
+    eval_interval = 300
+    learning_rate = 1e-2
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    eval_iters = 200
 
-    xb, yb = get_batch("train", block_size, batch_size, seed = 1337)
-    print(xb)
+    print("Running on", device)
 
-    m = BigramLanguageModel(vocab_size)
-    logits, loss = m(xb, yb)
-
-    idx = torch.zeros((1,1), dtype = torch.long) # 1 batch of 1 character with idx 0 (new line)
-    print(tok.decode(m.generate(idx, max_new_tokens= 100)[0].tolist()))
-
+    #MODEL CREATION
+    model = BigramLanguageModel(vocab_size)
+    m = model.to(device)
 
     #TRAIN THE BIGRAM MODEL
-    optimizer = torch.optim.AdamW(m.parameters(), lr = 1e-3)
+    optimizer = torch.optim.AdamW(m.parameters(), lr = learning_rate)
 
-    batch_size = 32
-
-    for steps in range(10000):
+    for iter in range(max_iters):
+        if iter % eval_interval == 0:
+            losses = estimate_loss()
+            print(f"step {iter}: train_loss {losses['train']:4f}, val_loss {losses['val']:4f}")
         xb, yb = get_batch("train", block_size, batch_size)
 
         logits, loss = m(xb, yb)
@@ -108,7 +126,8 @@ if __name__ == "__main__":
 
     print(loss.item())
 
-    print(tok.decode(m.generate(idx, max_new_tokens= 300)[0].tolist()))
+    context = torch.zeros((1,1), dtype = torch.long, device = device) # 1 batch of 1 character with idx 0 (new line)
+    print(tok.decode(m.generate(context, max_new_tokens= 300)[0].tolist()))
 
 
 
