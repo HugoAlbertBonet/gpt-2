@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 #HYPERPARAMETERS
-batch_size = 64
+batch_size = 32
 block_size = 512
 max_iters = 4000
 eval_interval = 500
@@ -179,7 +179,7 @@ def estimate_loss():
 if __name__ == "__main__":
     print("Running on", device)
 
-    with open("direction.txt", "r", encoding = "utf-8") as f:
+    with open("aitana.txt", "r", encoding = "utf-8") as f:
         text = f.read()
 
     chars, vocab_size = create_vocabulary(text)
@@ -213,7 +213,7 @@ if __name__ == "__main__":
 
     context = torch.zeros((1,1), dtype = torch.long, device = device) # 1 batch of 1 character with idx 0 (new line)
     print(tok.decode(m.generate(context, max_new_tokens= 3000)[0].tolist()))
-    torch.save(m, "direction.pt")
+    torch.save(m, "aitana.pt")
 
 
 
