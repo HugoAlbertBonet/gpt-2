@@ -69,7 +69,7 @@ class CrossAttentionHead(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, input, x): 
+    def forward(self, x, input): 
         B, T, C = x.shape
         key = self.key(x)
         query = self.query(input)
@@ -95,6 +95,20 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.dropout(self.proj(out))
+        return out
+    
+class MultiHeadCrossAttention(nn.Module):
+    """ Multiple heads of self-attention in parallel"""
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([CrossAttentionHead(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embed, n_embed)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, input):
+        out = torch.cat([h(x, input) for h in self.heads], dim = -1)
         out = self.dropout(self.proj(out))
         return out
     
@@ -127,6 +141,23 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.sa(self.ln1(x)) #per-token normalization
+        x = x + self.ffwd(self.ln2(x)) #residual connections
+        return x
+    
+class BlockCrossAttention(nn.Module):
+    """ Transformer block: communication (attention) followed by computation"""
+
+    def __init__(self, n_embed, n_head):
+        super().__init__()
+        head_size = n_embed // n_head
+        self.sa = MultiHeadCrossAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embed)
+        self.ln1 = nn.LayerNorm(n_embed)
+        self.ln1_2 = nn.LayerNorm(n_embed)
+        self.ln2 = nn.LayerNorm(n_embed)
+
+    def forward(self, x, input):
+        x = x + self.sa(self.ln1(x), self.ln1_2(input)) #per-token normalization
         x = x + self.ffwd(self.ln2(x)) #residual connections
         return x
 
@@ -184,7 +215,7 @@ class Encoder(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         self.block = Block(n_embed, n_head=1)
 
-    def forward(self, idx, targets = None):
+    def forward(self, idx):
         B, T = idx.shape
 
         #idx and targets are (Batch B, Block T) tensors of integers
@@ -193,6 +224,63 @@ class Encoder(nn.Module):
         x = tok_emb + pos_emb #(B,T,C)
         x = self.block(x)
         return x
+
+class Decoder(nn.Module):
+    """ Decoder for Encoder-Decoder architecture"""
+    def __init__(self):
+        super().__init__()
+
+        #lookup table for the logits of the next token
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.blocks = nn.Sequential(*[Block(n_embed, n_head=n_head) for i in range(n_layer-1)])
+        self.block_cross = BlockCrossAttention(n_embed, n_head = n_head)
+
+    def forward(self, idx, input):
+        B, T = idx.shape
+
+        #idx and targets are (Batch B, Block T) tensors of integers
+        tok_emb = self.token_embedding_table(idx) # (Batch B, Block T, n_embed C), each index will extract the row corresponding to it
+        pos_emb = self.position_embedding_table(torch.arange(T, device = device)) # (T, C)
+        x = tok_emb + pos_emb #(B,T,C)
+        x = self.blocks(x)
+        x = self.block_cross(x, input)
+        return x
+
+
+class EncoderDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        self.lm_head = nn.Linear(n_embed, vocab_size)
+    
+    def forward(self, x, input):
+        x = self.encoder(x)
+        x = self.decoder(x, input)
+        logits = self.lm_head(x) #(Batch, Block, Vocab_size)
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+        return logits, loss
+    
+    def generate(self, idx, input, max_new_tokens):
+
+        for _ in range(max_new_tokens):
+            idx_cond = idx[:, -block_size:] #crop to not exceed the block size
+            input_cond = input[:, -block_size:]
+            logits, _ = self(idx_cond, input_cond)
+            logits = logits[:, -1, :] # (B, C)
+            probs = F.softmax(logits, dim = -1) #(B, C)
+            idx_next = torch.multinomial(probs, num_samples = 1) # (B, 1)
+            idx = torch.cat((idx, idx_next), dim= 1) # (B, T+1)
+
+        return idx
 
 
 def create_vocabulary(text):
