@@ -57,6 +57,32 @@ class Head(nn.Module):
         out = wei @ v
         return out
     
+class CrossAttentionHead(nn.Module):
+    """ One head of cross-attention"""
+
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embed, head_size, bias = False)
+        self.query = nn.Linear(n_embed, head_size, bias = False)
+        self.value = nn.Linear(n_embed, head_size, bias = False)
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size))) #because it is not a parameter
+
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, input, x): 
+        B, T, C = x.shape
+        key = self.key(x)
+        query = self.query(input)
+
+        wei = query @ key.transpose(-2, -1) * C**-0.5
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
+
+        v = self.value(x)
+        out = wei @ v
+        return out
+    
 
 class MultiHeadAttention(nn.Module):
     """ Multiple heads of self-attention in parallel"""
