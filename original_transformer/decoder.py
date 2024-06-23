@@ -131,7 +131,7 @@ class Block(nn.Module):
         return x
 
 
-class BigramLanguageModel(nn.Module):
+class DecoderOnly(nn.Module):
     """ Decoder-only transformer with character tokenization,
     for encoder-decoder a cross-attention layer should be added"""
     def __init__(self):
@@ -173,6 +173,26 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim= 1) # (B, T+1)
 
         return idx
+    
+class Encoder(nn.Module):
+    """ Decoder-only transformer with character tokenization,
+    for encoder-decoder a cross-attention layer should be added"""
+    def __init__(self):
+        super().__init__()
+        #lookup table for the logits of the next token
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.block = Block(n_embed, n_head=1)
+
+    def forward(self, idx, targets = None):
+        B, T = idx.shape
+
+        #idx and targets are (Batch B, Block T) tensors of integers
+        tok_emb = self.token_embedding_table(idx) # (Batch B, Block T, n_embed C), each index will extract the row corresponding to it
+        pos_emb = self.position_embedding_table(torch.arange(T, device = device)) # (T, C)
+        x = tok_emb + pos_emb #(B,T,C)
+        x = self.block(x)
+        return x
 
 
 def create_vocabulary(text):
@@ -218,7 +238,7 @@ if __name__ == "__main__":
     val_data = data[n:]
 
     #MODEL CREATION
-    model = BigramLanguageModel()
+    model = DecoderOnly()
     m = model.to(device)
     print("The model has", sum(p.numel() for p in m.parameters())/1e6, "M parameters")
     #TRAIN THE BIGRAM MODEL
