@@ -286,8 +286,16 @@ if __name__ == "__main__":
         torch.cuda.manual_seed(1337)
 
     #gradient accumulation
+    total_batch_size = 524288 #2**19, aprox 0.5M
+    B = 4 #micro batch
+    T = 1024
+    assert total_batch_size % (B*T) == 0, "make sure total batch size is divisible by B*T"
+    grad_accum_steps = total_batch_size// (B*T)
+    print(f"Total desired batch size: {total_batch_size}")
+    print(f"=> Gradient accumulation steps: {grad_accum_steps}")
 
-    train_loader = DataLoaderLite(B = 4, T = 1024)
+
+    train_loader = DataLoaderLite(B = B, T = T)
 
     torch.set_float32_matmul_precision("high") #TensorFloat32, more efficient but less precision
 
@@ -318,12 +326,17 @@ if __name__ == "__main__":
     optimizer = model.configure_optimizers(weight_decay = 0.1, learning_rate = 6e-4, device = device)
     for step in range(max_steps):
         t0 = time.time()
-        x, y = train_loader.next_batch()
-        x, y = x.to(device), y.to(device)
+        
         optimizer.zero_grad() #always start with zero gradients
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):  #for mixed precision, more efficiency
-            logits, loss = model(x, y)
-        loss.backward() #always adds to the gradients, thats why they need to be zero
+        loss_accum = 0.0
+        for micro_step in range(grad_accum_steps):
+            x, y = train_loader.next_batch()
+            x, y = x.to(device), y.to(device)
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):  #for mixed precision, more efficiency
+                logits, loss = model(x, y)
+            loss = loss / grad_accum_steps 
+            loss_accum += loss.detach()
+            loss.backward() #always adds to the gradients, thats why they need to be zero
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) #GPT-3 hyperparameters, prevents the model from changing a lot with a bad batch
 
         lr = get_lr(step)
@@ -336,8 +349,8 @@ if __name__ == "__main__":
         torch.cuda.synchronize() #wait for the GPU to finish all the scheduled work
         t1 = time.time()
         dt = (t1 - t0)*1000
-        tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-        print(f"step {step} | loss: {loss.item()} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f} ms | tok/sec: {tokens_per_sec}")
+        tokens_per_sec = (train_loader.B * train_loader.T * grad_accum_steps) / (t1 - t0)
+        print(f"step {step} | loss: {loss_accum.item()} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f} ms | tok/sec: {tokens_per_sec}")
 
 
 
