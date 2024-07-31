@@ -261,7 +261,8 @@ if __name__ == "__main__":
 
     torch.set_float32_matmul_precision("high") #TensorFloat32, more efficient but less precision
 
-    model = GPT(GPTConfig())
+    model = GPT(GPTConfig(vocab_size=50304)) #increase it to a number with lots of powers of 2 -> more calculations but more efficient!
+    # it is only used in the last decoding layer, so it has to learn that the fake tokens are never used
     model.eval() #to evaluation mode for layers like dropout
     model.to(device)
     # model = torch.compile(model) #compiles the code, needs compiling time but then it is faster
